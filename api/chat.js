@@ -1,7 +1,6 @@
 
 module.exports = async (req, res) => {
-  const allowedOrigin =
-    "https://nurmohammod5619-cpu.github.io";
+  const allowedOrigin = "https://niruai.vercel.app";
 
   res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -13,7 +12,7 @@ module.exports = async (req, res) => {
 
   if (req.method !== "POST") {
     return res.status(405).json({
-      error: "Method not allowed"
+      error: "Method not allowed."
     });
   }
 
@@ -26,7 +25,12 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const incoming = req.body?.messages;
+    const body =
+      typeof req.body === "string"
+        ? JSON.parse(req.body)
+        : req.body;
+
+    const incoming = body?.messages;
 
     if (!Array.isArray(incoming)) {
       return res.status(400).json({
@@ -34,13 +38,44 @@ module.exports = async (req, res) => {
       });
     }
 
+    const systemPrompt = `
+তোমার নাম Niru। তুমি Niru AI, একটি ব্যক্তিগত AI assistant।
+
+তোমার নির্মাতা Nur Mohammod।
+তিনি NexChat App-এরও নির্মাতা।
+
+পরিচয় সংক্রান্ত নিয়ম:
+
+১. কেউ তোমার নাম জিজ্ঞেস করলে বলবে:
+"আমার নাম Niru।"
+
+২. কেউ তোমার নির্মাতা সম্পর্কে জিজ্ঞেস করলে বলবে:
+"আমাকে বানিয়েছেন Nur Mohammod, যিনি কিনা NexChat App-ও বানিয়েছেন।"
+
+৩. কেউ তোমার পরিচয় জানতে চাইলে বলবে:
+"আমি Niru AI। আমাকে তৈরি করেছেন Nur Mohammod।"
+
+৪. কখনো নিজেকে ChatGPT বা OpenAI-এর ChatGPT বলে পরিচয় দেবে না।
+
+৫. Groq তোমার AI response তৈরি করার প্রযুক্তি।
+কিন্তু Groq-কে তোমার নাম বা নির্মাতা বলবে না।
+
+৬. ব্যবহারকারীর প্রশ্নের উত্তর সঠিক, পরিষ্কার ও সহায়কভাবে দেবে।
+
+৭. ব্যবহারকারী বাংলায় কথা বললে বাংলায় উত্তর দেবে।
+ইংরেজিতে কথা বললে ইংরেজিতে উত্তর দেবে।
+
+৮. নিজের পরিচয় সম্পর্কে প্রশ্নের ক্ষেত্রে এই নির্দেশনাগুলো অনুসরণ করবে।
+`;
+
     const messages = incoming
-      .filter(m =>
-        ["user", "assistant"].includes(m.role) &&
-        typeof m.content === "string"
+      .filter(
+        (m) =>
+          ["user", "assistant"].includes(m?.role) &&
+          typeof m.content === "string"
       )
       .slice(-20)
-      .map(m => ({
+      .map((m) => ({
         role: m.role,
         content: m.content
       }));
@@ -60,9 +95,16 @@ module.exports = async (req, res) => {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          model: "openai/gpt-oss-120b",
-          messages,
-          max_completion_tokens: 2048
+          model: "llama-3.3-70b-versatile",
+          messages: [
+            {
+              role: "system",
+              content: systemPrompt
+            },
+            ...messages
+          ],
+          temperature: 0.7,
+          max_tokens: 2048
         })
       }
     );
@@ -71,13 +113,13 @@ module.exports = async (req, res) => {
 
     if (!response.ok) {
       console.error("Groq API error:", data);
+
       return res.status(502).json({
         error: "Niru AI could not get a response from Groq."
       });
     }
 
-    const reply =
-      data.choices?.[0]?.message?.content;
+    const reply = data?.choices?.[0]?.message?.content;
 
     if (!reply) {
       return res.status(502).json({
@@ -85,7 +127,9 @@ module.exports = async (req, res) => {
       });
     }
 
-    return res.status(200).json({ reply });
+    return res.status(200).json({
+      reply: reply
+    });
 
   } catch (error) {
     console.error("Niru server error:", error);
