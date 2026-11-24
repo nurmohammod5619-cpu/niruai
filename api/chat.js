@@ -4,15 +4,17 @@
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
-const BIG = process.env.NIRU_MODEL_BIG || "llama-3.3-70b-versatile";
-const FAST = process.env.NIRU_MODEL_FAST || "llama-3.1-8b-instant";
+const BIG = process.env.NIRU_MODEL_BIG || "openai/gpt-oss-120b";
+const FAST = process.env.NIRU_MODEL_FAST || "openai/gpt-oss-20b";
 const MODEL_MAP = {
   "niru-ultra": BIG,
   "niru-pro": BIG,
-  "niru-plus": BIG,
+  "niru-plus": FAST,
   "niru-lite": FAST,
 };
-const MAX_TOKENS = { low: 700, medium: 1500, high: 3000 };
+// gpt-oss models "think" first; thinking tokens count toward max_tokens, so keep these generous.
+const MAX_TOKENS = { low: 2000, medium: 3500, high: 6000 };
+const EFFORTS = ["low", "medium", "high"];
 
 const MODE_HINTS = {
   study: "Study Buddy mode: explain step by step, simply, and check understanding.",
@@ -68,7 +70,8 @@ module.exports = async (req, res) => {
   }
 
   const model = MODEL_MAP[body.model] || BIG;
-  const max_tokens = MAX_TOKENS[body.effort] || MAX_TOKENS.medium;
+  const effort = body.model === "niru-lite" ? "low" : (EFFORTS.includes(body.effort) ? body.effort : "medium");
+  const max_tokens = MAX_TOKENS[effort];
 
   try {
     const r = await fetch(GROQ_URL, {
@@ -79,6 +82,7 @@ module.exports = async (req, res) => {
         messages: [{ role: "system", content: system }, ...history],
         temperature: 0.7,
         max_tokens,
+        reasoning_effort: effort,
         stream: false, // frontend accepts plain JSON { reply }
       }),
     });
