@@ -13,7 +13,9 @@ const MODEL_MAP = {
   "niru-lite": FAST,
 };
 // gpt-oss models "think" first; thinking tokens count toward max_tokens, so keep these generous.
-const MAX_TOKENS = { low: 2000, medium: 3500, high: 6000 };
+// Groq free tier limits tokens per minute (~8000 for gpt-oss-120b), and max_tokens counts toward it.
+const MAX_TOKENS = { low: 1200, medium: 1800, high: 2500 };
+const MAX_INPUT_CHARS = 9000; // total across the whole conversation sent to the model
 const EFFORTS = ["low", "medium", "high"];
 
 const MODE_HINTS = {
@@ -55,10 +57,18 @@ module.exports = async (req, res) => {
     return send(res, 400, { error: "Request must include a non-empty messages array." });
   }
 
-  const history = body.messages
+  let history = body.messages
     .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content.trim())
     .slice(-20)
-    .map((m) => ({ role: m.role, content: m.content.slice(0, 12000) }));
+    .map((m) => ({ role: m.role, content: m.content.slice(0, 6000) }));
+  // Keep the newest messages that fit the budget (always keep the last one).
+  let used = 0, kept = [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    used += history[i].content.length;
+    if (used > MAX_INPUT_CHARS && kept.length) break;
+    kept.unshift(history[i]);
+  }
+  history = kept;
   if (!history.length) return send(res, 400, { error: "No valid messages to send." });
 
   let system = "You are Niru AI, a friendly, helpful AI companion. Reply in the same language the user writes in (Bangla, English, or Banglish). Be clear and concise. If anyone asks who made, built, created or developed you (or who your maker, creator or developer is), answer that you were created by Nur Mohammod, who also built NexChat. Mention this only when asked, and say it in the user's language.";
