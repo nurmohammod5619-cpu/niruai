@@ -1,141 +1,100 @@
+// Vercel serverless function: POST /api/chat
+// Key lives ONLY in Vercel Environment Variables: NIRU_AI_GROQ_KEY
+// Optional env vars: NIRU_MODEL_BIG, NIRU_MODEL_FAST (override Groq model names without editing code)
+
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+
+const BIG = process.env.NIRU_MODEL_BIG || "llama-3.3-70b-versatile";
+const FAST = process.env.NIRU_MODEL_FAST || "llama-3.1-8b-instant";
+const MODEL_MAP = {
+  "niru-ultra": BIG,
+  "niru-pro": BIG,
+  "niru-plus": BIG,
+  "niru-lite": FAST,
+};
+const MAX_TOKENS = { low: 700, medium: 1500, high: 3000 };
+
+const MODE_HINTS = {
+  study: "Study Buddy mode: explain step by step, simply, and check understanding.",
+  code: "Code Mentor mode: give clean, working code with short explanations.",
+  write: "Writer mode: help write and polish text with a clear, natural style.",
+  translate: "Translator mode: translate accurately and keep the tone of the original.",
+  friend: "Friend mode: be warm, casual and supportive.",
+};
+
+function send(res, status, body) {
+  res.status(status).json(body);
+}
 
 module.exports = async (req, res) => {
-  const allowedOrigin = "https://niruai.vercel.app";
-
-  res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
+  // Same-origin on Vercel, so CORS is not required. Only answer preflight politely.
   if (req.method === "OPTIONS") {
-    return res.status(200).end();
+    res.setHeader("Allow", "POST, OPTIONS");
+    return res.status(204).end();
   }
-
   if (req.method !== "POST") {
-    return res.status(405).json({
-      error: "Method not allowed."
+    res.setHeader("Allow", "POST, OPTIONS");
+    return send(res, 405, { error: "Method not allowed." });
+  }
+
+  const key = process.env.NIRU_AI_GROQ_KEY;
+  if (!key) {
+    return send(res, 500, {
+      error: "Server is missing NIRU_AI_GROQ_KEY. Add it in Vercel > Settings > Environment Variables, then redeploy.",
     });
   }
 
-  const apiKey = process.env.NIRU_AI_GROQ_KEY;
-
-  if (!apiKey) {
-    return res.status(500).json({
-      error: "Niru AI API key is missing."
-    });
+  // Vercel parses JSON bodies automatically; fall back to manual parsing just in case.
+  let body = req.body;
+  if (typeof body === "string") {
+    try { body = JSON.parse(body); } catch (_) { body = null; }
   }
+  if (!body || !Array.isArray(body.messages) || !body.messages.length) {
+    return send(res, 400, { error: "Request must include a non-empty messages array." });
+  }
+
+  const history = body.messages
+    .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content.trim())
+    .slice(-20)
+    .map((m) => ({ role: m.role, content: m.content.slice(0, 12000) }));
+  if (!history.length) return send(res, 400, { error: "No valid messages to send." });
+
+  let system = "You are Niru AI, a friendly, helpful AI companion. Reply in the same language the user writes in (Bangla, English, or Banglish). Be clear and concise. If anyone asks who made, built, created or developed you (or who your maker, creator or developer is), answer that you were created by Nur Mohammod, who also built NexChat. Mention this only when asked, and say it in the user's language.";
+  if (body.user) system += " The user's name is " + String(body.user).slice(0, 60) + ".";
+  if (MODE_HINTS[body.mode]) system += " " + MODE_HINTS[body.mode];
+  if (body.space && body.space.name) {
+    system += " You are working inside the space \"" + String(body.space.name).slice(0, 60) + "\".";
+    if (body.space.note) system += " Space instructions: " + String(body.space.note).slice(0, 400);
+  }
+
+  const model = MODEL_MAP[body.model] || BIG;
+  const max_tokens = MAX_TOKENS[body.effort] || MAX_TOKENS.medium;
 
   try {
-    const body =
-      typeof req.body === "string"
-        ? JSON.parse(req.body)
-        : req.body;
-
-    const incoming = body?.messages;
-
-    if (!Array.isArray(incoming)) {
-      return res.status(400).json({
-        error: "Invalid messages."
-      });
-    }
-
-    const systemPrompt = `
-তোমার নাম Niru। তুমি Niru AI, একটি ব্যক্তিগত AI assistant।
-
-তোমার নির্মাতা Nur Mohammod।
-তিনি NexChat App-এরও নির্মাতা।
-
-পরিচয় সংক্রান্ত নিয়ম:
-
-১. কেউ তোমার নাম জিজ্ঞেস করলে বলবে:
-"আমার নাম Niru।"
-
-২. কেউ তোমার নির্মাতা সম্পর্কে জিজ্ঞেস করলে বলবে:
-"আমাকে বানিয়েছেন Nur Mohammod, যিনি কিনা NexChat App-ও বানিয়েছেন।"
-
-৩. কেউ তোমার পরিচয় জানতে চাইলে বলবে:
-"আমি Niru AI। আমাকে তৈরি করেছেন Nur Mohammod।"
-
-৪. কখনো নিজেকে ChatGPT বা OpenAI-এর ChatGPT বলে পরিচয় দেবে না।
-
-৫. Groq তোমার AI response তৈরি করার প্রযুক্তি।
-কিন্তু Groq-কে তোমার নাম বা নির্মাতা বলবে না।
-
-৬. ব্যবহারকারীর প্রশ্নের উত্তর সঠিক, পরিষ্কার ও সহায়কভাবে দেবে।
-
-৭. ব্যবহারকারী বাংলায় কথা বললে বাংলায় উত্তর দেবে।
-ইংরেজিতে কথা বললে ইংরেজিতে উত্তর দেবে।
-
-৮. নিজের পরিচয় সম্পর্কে প্রশ্নের ক্ষেত্রে এই নির্দেশনাগুলো অনুসরণ করবে।
-`;
-
-    const messages = incoming
-      .filter(
-        (m) =>
-          ["user", "assistant"].includes(m?.role) &&
-          typeof m.content === "string"
-      )
-      .slice(-20)
-      .map((m) => ({
-        role: m.role,
-        content: m.content
-      }));
-
-    if (!messages.length) {
-      return res.status(400).json({
-        error: "No valid messages."
-      });
-    }
-
-    const response = await fetch(
-      "https://api.groq.com/openai/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
-          messages: [
-            {
-              role: "system",
-              content: systemPrompt
-            },
-            ...messages
-          ],
-          temperature: 0.7,
-          max_tokens: 2048
-        })
-      }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      console.error("Groq API error:", data);
-
-      return res.status(502).json({
-        error: "Niru AI could not get a response from Groq."
-      });
-    }
-
-    const reply = data?.choices?.[0]?.message?.content;
-
-    if (!reply) {
-      return res.status(502).json({
-        error: "Empty AI response."
-      });
-    }
-
-    return res.status(200).json({
-      reply: reply
+    const r = await fetch(GROQ_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "system", content: system }, ...history],
+        temperature: 0.7,
+        max_tokens,
+        stream: false, // frontend accepts plain JSON { reply }
+      }),
     });
 
-  } catch (error) {
-    console.error("Niru server error:", error);
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const msg = (data && data.error && data.error.message) || "Groq error " + r.status;
+      console.error("Groq error", r.status, msg);
+      return send(res, 502, { error: "AI provider error: " + msg });
+    }
 
-    return res.status(500).json({
-      error: "Niru AI server error."
-    });
+    const reply = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+    if (!reply) return send(res, 502, { error: "AI provider returned an empty reply." });
+    return send(res, 200, { reply });
+  } catch (err) {
+    console.error("Chat function failed", err);
+    return send(res, 500, { error: "Server could not reach the AI provider: " + (err && err.message ? err.message : "unknown error") });
   }
 };
